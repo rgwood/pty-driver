@@ -43,7 +43,7 @@ fn main() -> Result<()> {
                 break;
             }
             let bytes = buf[0..size].to_vec();
-            const QUERY_CURSOR_POSITION: &[u8] = "[6n".as_bytes();
+            const QUERY_CURSOR_POSITION: &[u8] = b"[6n";
 
             // https://stackoverflow.com/a/35907071/854694
             fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -67,7 +67,7 @@ fn main() -> Result<()> {
 
     // Kill Nu after a few seconds in case it gets stuck
     thread::spawn(move || -> Result<()> {
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_secs(1));
         killer.kill()?;
         Ok(())
     });
@@ -75,9 +75,9 @@ fn main() -> Result<()> {
     // Seems like we need to wait for the prompt to be ready before Nu will listen
     // TODO: figure out a way to remove this sleep
     thread::sleep(Duration::from_millis(100));
-    
+
     // try to get Nu to run a command
-    stdin_tx.send("lsb_release -a\r\n".as_bytes().to_vec())?;
+    stdin_tx.send(b"lsb_release -a\r".to_vec())?;
 
     child.wait().unwrap();
 
