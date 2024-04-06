@@ -2,16 +2,18 @@ use std::{io::Read, io::Write, sync::mpsc::channel, thread, time::Duration};
 
 use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use termwiz::escape::{csi::Cursor, Action, CSI};
 
 fn main() -> Result<()> {
-    let nu_path = "/home/reilly/bin/nu";
+    let nu_path = "/home/linuxbrew/.linuxbrew/bin/nu";
     let pty_system = native_pty_system();
+    let size = crossterm::terminal::window_size()?;
     let pair = pty_system.openpty(PtySize {
-        rows: 24,
-        cols: 80,
+        rows: size.rows,
+        cols: size.columns,
         // FIXME: set realistic values for pixel_*
-        pixel_width: 0,
-        pixel_height: 0,
+        pixel_width: size.width,
+        pixel_height: size.height,
     })?;
 
     let command = CommandBuilder::new(nu_path);
@@ -31,10 +33,14 @@ fn main() -> Result<()> {
         }
         Ok(())
     });
+
+    crossterm::terminal::enable_raw_mode()?;
     
     // watch the child's output, responding to escape codes and writing all output to disk
     let cloned_stdin_tx = stdin_tx.clone();
     thread::spawn(move || -> Result<()> {
+
+        let mut parser = termwiz::escape::parser::Parser::new();
         let mut recording = std::fs::File::create("output.txt")?;
         let mut buf = [0u8; 8192];
         loop {
@@ -43,23 +49,20 @@ fn main() -> Result<()> {
                 break;
             }
             let bytes = buf[0..size].to_vec();
-            const QUERY_CURSOR_POSITION: &[u8] = b"[6n";
 
-            // https://stackoverflow.com/a/35907071/854694
-            fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-                haystack
-                    .windows(needle.len())
-                    .position(|window| window == needle)
+            let actions = parser.parse_as_vec(&bytes);
+
+            for action in actions {
+                // we gotta respond to Query Cursor Position messages or Reedline will hang
+                if matches!(action, Action::CSI(CSI::Cursor(Cursor::RequestActivePositionReport))) {
+                    // response format is <ESC>[{ROW};{COLUMN}R
+                    // hardcoding 20;20 for now
+                    let cursor_position_msg = b"\x1B[20;20R".to_vec();
+                    cloned_stdin_tx.send(cursor_position_msg)?;
+                }
             }
 
-            // we gotta respond to Query Cursor Position messages or Reedline will hang
-            // FIXME: an escape sequence *could* be split across multiple reads... handle that someday
-            if find_subsequence(&bytes, QUERY_CURSOR_POSITION).is_some() {
-                // response format is <ESC>[{ROW};{COLUMN}R
-                // hardcoding 20;20 for now
-                let cursor_position_msg = b"\x1B[20;20R".to_vec();
-                cloned_stdin_tx.send(cursor_position_msg)?;
-            }
+            std::io::stdout().write_all(&bytes)?;
             recording.write_all(&bytes)?;
         }
         Ok(())
@@ -80,6 +83,10 @@ fn main() -> Result<()> {
     stdin_tx.send(b"lsb_release -a\r".to_vec())?;
 
     child.wait().unwrap();
+
+    crossterm::terminal::disable_raw_mode()?;
+
+    println!("Done!");
 
     Ok(())
 }
